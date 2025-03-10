@@ -207,7 +207,7 @@ export default function DropboxFilePicker({ onFilesSelected, onClose }: DropboxF
           try {
             // Get streaming URL
             const streamUrl = await service.getStreamUrl(file.path)
-            console.log(`Got stream URL for ${file.name}`)
+            console.log(`Got stream URL for ${file.name}`, streamUrl)
             
             // Extract file name without extension as title
             const title = file.name.replace(/\.[^/.]+$/, '')
