@@ -193,6 +193,7 @@ useEffect(() => {
   let isCancelled = false;
   
   const loadAudio = async () => {
+    try {
     // Increment play count in database
     beatService.incrementPlayCount(currentBeat.id).catch(console.error);
     
@@ -220,7 +221,14 @@ useEffect(() => {
         if (provider) {
           try {
             const cloudService = createCloudStorageService(provider);
+          
+            // Attempt to get a fresh stream URL
             const streamUrl = await cloudService.getStreamUrl(currentBeat.cloudFileId);
+            
+            // Optional: If the previous URL failed, update the beat's cloudUrl
+            if (currentBeat.cloudUrl !== streamUrl) {
+              await updateBeat(currentBeat.id, { cloudUrl: streamUrl });
+            }
             
             if (isCancelled) return;
             console.log("Downloading file:", currentBeat.title);
@@ -245,8 +253,11 @@ useEffect(() => {
             cacheManager?.cacheAudio(currentBeat.id, audioArrayBuffer)
               .then(() => console.log("Audio cached"))
               .catch(err => console.error("Cache error:", err));
-          } catch (downloadError) {
-            console.error("Download error:", downloadError);
+          } catch (linkError) {
+            console.error("Failed to get new stream URL:", linkError);
+
+            setIsLoading(false);
+            setIsPlaying(false);
           }
         }
       }
@@ -320,6 +331,10 @@ useEffect(() => {
       if (!isCancelled) {
         setIsLoading(false);
       }
+    }
+
+    } catch (error) {
+      console.error("bro ts fucked up:", linkError);
     }
   };
   

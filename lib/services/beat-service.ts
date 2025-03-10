@@ -288,7 +288,7 @@ export const beatService = {
           const { error: deleteError } = await supabase
             .from('beat_tags')
             .delete()
-            .eq('beatId', id)
+            .eq('beatid', id)
           
           if (deleteError) {
             console.error(`Error removing tags from beat ${id}:`, deleteError)
@@ -336,7 +336,7 @@ export const beatService = {
         const { error: tagError } = await supabase
           .from('beat_tags')
           .delete()
-          .eq('beatId', id)
+          .eq('beatid', id)
         
         if (tagError) {
           console.error(`Error deleting tags for beat ${id}:`, tagError)
@@ -349,7 +349,7 @@ export const beatService = {
         const { error: collectionError } = await supabase
           .from('collection_beats')
           .delete()
-          .eq('beatId', id)
+          .eq('beatid', id)
         
         if (collectionError) {
           console.error(`Error deleting collection relationships for beat ${id}:`, collectionError)
