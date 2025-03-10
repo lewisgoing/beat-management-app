@@ -44,6 +44,14 @@ type MusicContextType = {
 const MusicContext = createContext<MusicContextType | undefined>(undefined)
 
 export function MusicProvider({ children }: { children: React.ReactNode }) {
+  const [audioLoadingState, setAudioLoadingState] = useState({
+    isLoading: false,
+    isDownloaded: false,
+    blobUrl: null,
+    beatId: null
+  });
+  
+
   const [beats, setBeats] = useState<Beat[]>([])
   const [collections, setCollections] = useState<Collection[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -131,105 +139,290 @@ export function MusicProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   // Handle beat changes
-  useEffect(() => {
-    const loadAudio = async () => {
-      if (!currentBeat || !audioRef.current) return
-      
-      setIsLoading(true)
-      
-      try {
-        // Update play count in Supabase when a beat starts playing
-        beatService.incrementPlayCount(currentBeat.id).catch(console.error)
-        
-        // Check if we have a cached version
-        const cachedAudio = cacheManager?.getCachedAudio(currentBeat.id)
-        
-        if (cachedAudio) {
-          // Use cached audio
-          const cachedData = await cachedAudio
-          if (cachedData) {
-            const blob = new Blob([cachedData], { type: 'audio/mpeg' })
-            const url = URL.createObjectURL(blob)
-            audioRef.current.src = url
-          } else {
-            // Cache miss, continue with normal loading
-            await loadFromSourceOrCloud()
-          }
-        } else {
-          // No cache available
-          await loadFromSourceOrCloud()
-        }
-        
-        audioRef.current.load()
-        
-        if (isPlaying) {
-          try {
-            await audioRef.current.play()
-          } catch (error) {
-            console.error('Failed to play audio:', error)
-            setIsPlaying(false)
-          }
-        }
-      } catch (error) {
-        console.error('Error loading audio:', error)
-      } finally {
-        setIsLoading(false)
-      }
+// Handle beat changes - completely revised approach
+useEffect(() => {
+  // Skip if no beat is selected
+  if (!currentBeat || !audioRef.current) return;
+  
+  // Clean up function to handle unmounting or beat changes
+  const cleanup = () => {
+    // Revoke any existing blob URLs to prevent memory leaks
+    if (audioLoadingState.blobUrl) {
+      URL.revokeObjectURL(audioLoadingState.blobUrl);
     }
     
-    const loadFromSourceOrCloud = async () => {
-      if (!currentBeat || !audioRef.current) return
+    // Reset loading state
+    setAudioLoadingState({
+      isLoading: false,
+      isDownloaded: false,
+      blobUrl: null,
+      beatId: null
+    });
+    
+    // Stop any existing playback
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
+    }
+    
+    // Reset play state
+    setIsPlaying(false);
+  };
+  
+  // Don't reload if we already have this beat loaded
+  if (audioLoadingState.beatId === currentBeat.id && audioLoadingState.isDownloaded) {
+    console.log("Beat already loaded:", currentBeat.title);
+    return;
+  }
+  
+  // Clean up previous audio
+  cleanup();
+  
+  // Set loading state
+  setIsLoading(true);
+  setAudioLoadingState(prev => ({
+    ...prev,
+    isLoading: true,
+    beatId: currentBeat.id
+  }));
+  
+  // Track this function execution to prevent race conditions
+  const loadId = Date.now();
+  let isCancelled = false;
+  
+  const loadAudio = async () => {
+    // Increment play count in database
+    beatService.incrementPlayCount(currentBeat.id).catch(console.error);
+    
+    try {
+      let audioArrayBuffer = null;
+      let mimeType = 'audio/mpeg';
       
-      if (currentBeat.cloudProvider && currentBeat.cloudFileId) {
-        // Stream from cloud storage
-        const provider = await getProvider(currentBeat.cloudProvider)
-        
+      // Try to get from cache first
+      const cachedAudio = cacheManager?.getCachedAudio(currentBeat.id);
+      if (cachedAudio) {
+        try {
+          const cachedData = await cachedAudio;
+          if (cachedData && !isCancelled) {
+            console.log("Using cached audio for", currentBeat.title);
+            audioArrayBuffer = cachedData;
+          }
+        } catch (cacheError) {
+          console.error("Cache error:", cacheError);
+        }
+      }
+      
+      // If not in cache and we have cloud info, download it
+      if (!audioArrayBuffer && currentBeat.cloudProvider && currentBeat.cloudFileId && !isCancelled) {
+        const provider = await getProvider(currentBeat.cloudProvider);
         if (provider) {
           try {
-            const cloudService = createCloudStorageService(provider)
-            const streamUrl = await cloudService.getStreamUrl(currentBeat.cloudFileId)
+            const cloudService = createCloudStorageService(provider);
+            const streamUrl = await cloudService.getStreamUrl(currentBeat.cloudFileId);
             
-            audioRef.current.src = streamUrl
+            if (isCancelled) return;
+            console.log("Downloading file:", currentBeat.title);
             
-            // Cache the audio for future use
-            fetch(streamUrl)
-              .then(response => response.arrayBuffer())
-              .then(buffer => {
-                cacheManager?.cacheAudio(currentBeat.id, buffer)
-              })
-              .catch(error => {
-                console.error('Failed to cache audio:', error)
-              })
-          } catch (error) {
-            console.error(`Failed to load from cloud: ${error}`)
-            audioRef.current.src = currentBeat.audioUrl || ''
+            const response = await fetch(streamUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            
+            audioArrayBuffer = await response.arrayBuffer();
+            
+            if (isCancelled) return;
+            console.log("Download complete:", audioArrayBuffer.byteLength, "bytes");
+            
+            // Get MIME type from filename
+            const filename = currentBeat.cloudFileId.toLowerCase();
+            if (filename.endsWith('.wav')) mimeType = 'audio/wav';
+            if (filename.endsWith('.mp3')) mimeType = 'audio/mpeg';
+            if (filename.endsWith('.aac')) mimeType = 'audio/aac';
+            if (filename.endsWith('.flac')) mimeType = 'audio/flac';
+            if (filename.endsWith('.ogg')) mimeType = 'audio/ogg';
+            
+            // Cache for future use
+            cacheManager?.cacheAudio(currentBeat.id, audioArrayBuffer)
+              .then(() => console.log("Audio cached"))
+              .catch(err => console.error("Cache error:", err));
+          } catch (downloadError) {
+            console.error("Download error:", downloadError);
           }
-        } else {
-          console.error(`Cloud provider not connected: ${currentBeat.cloudProvider}`)
-          audioRef.current.src = currentBeat.audioUrl || ''
         }
-      } else {
-        // Fallback to regular URL
-        audioRef.current.src = currentBeat.audioUrl || ''
+      }
+      
+      // If we have audio data, create blob and set up audio element
+      if (audioArrayBuffer && !isCancelled) {
+        // Create blob and URL
+        const blob = new Blob([audioArrayBuffer], { type: mimeType });
+        const blobUrl = URL.createObjectURL(blob);
+        
+        if (isCancelled) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        
+        // Configure audio element
+        audioRef.current.preload = "auto";
+        audioRef.current.src = blobUrl;
+        audioRef.current.crossOrigin = "anonymous";
+        
+        // Wait for metadata to load before proceeding
+        await new Promise((resolve) => {
+          const handleMetadata = () => {
+            audioRef.current.removeEventListener('loadedmetadata', handleMetadata);
+            resolve();
+          };
+          
+          audioRef.current.addEventListener('loadedmetadata', handleMetadata);
+          
+          // In case metadata event doesn't fire
+          setTimeout(resolve, 2000);
+        });
+        
+        if (isCancelled) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        
+        // Update state to indicate download is complete
+        setAudioLoadingState({
+          isLoading: false,
+          isDownloaded: true,
+          blobUrl: blobUrl,
+          beatId: currentBeat.id
+        });
+        
+        console.log("Audio ready to play:", currentBeat.title);
+      } else if (!isCancelled) {
+        // Fallback to direct URL if no cloud data
+        console.log("Using direct URL fallback");
+        audioRef.current.src = currentBeat.audioUrl || '';
+        
+        setAudioLoadingState({
+          isLoading: false,
+          isDownloaded: false,
+          blobUrl: null,
+          beatId: currentBeat.id
+        });
+      }
+    } catch (error) {
+      if (!isCancelled) {
+        console.error("Audio load error:", error);
+        setAudioLoadingState({
+          isLoading: false,
+          isDownloaded: false,
+          blobUrl: null,
+          beatId: currentBeat.id
+        });
+      }
+    } finally {
+      if (!isCancelled) {
+        setIsLoading(false);
       }
     }
-    
-    loadAudio()
-  }, [currentBeat, getProvider])
+  };
+  
+  // Start loading the audio
+  loadAudio();
+  
+  // Cleanup on unmount or when currentBeat changes
+  return () => {
+    isCancelled = true;
+    cleanup();
+  };
+}, [currentBeat?.id]); // IMPORTANT: Only depend on the beat ID, not the entire beat object
 
-  // Handle play/pause
-  useEffect(() => {
+// Separate effect to handle play/pause state changes
+useEffect(() => {
+  if (!audioRef.current || !currentBeat) return;
+  
+  // Don't try to play if we're still loading or haven't downloaded the audio
+  if (isLoading || audioLoadingState.isLoading || 
+      (currentBeat.id === audioLoadingState.beatId && !audioLoadingState.isDownloaded)) {
+    console.log("Not playing yet - still loading or not downloaded");
+    return;
+  }
+  
+  const playAudio = async () => {
+    if (isPlaying) {
+      try {
+        console.log("Attempting to play:", currentBeat.title);
+        const playPromise = audioRef.current.play();
+        
+        if (playPromise) {
+          await playPromise;
+          console.log("Playback started successfully");
+        }
+      } catch (error) {
+        console.error("Play error:", error);
+        setIsPlaying(false);
+      }
+    } else {
+      console.log("Pausing playback");
+      audioRef.current.pause();
+    }
+  };
+  
+  playAudio();
+}, [isPlaying, isLoading, audioLoadingState.isDownloaded, audioLoadingState.beatId, currentBeat?.id]);
+
+// Add these event listeners to the audio element setup in the first useEffect
+useEffect(() => {
+  if (!audioRef.current) {
+    audioRef.current = new Audio();
+    
+    // These event listeners help with debugging
+    audioRef.current.addEventListener("error", (e) => {
+      console.error("Audio element error:", e);
+    });
+    
+    audioRef.current.addEventListener("waiting", () => {
+      console.log("Audio is waiting for more data");
+    });
+    
+    audioRef.current.addEventListener("stalled", () => {
+      console.log("Audio playback has stalled");
+    });
+    
+    audioRef.current.addEventListener("suspend", () => {
+      console.log("Audio loading has been suspended");
+    });
+    
+    // Standard event listeners
+    audioRef.current.addEventListener("timeupdate", () => {
+      if (audioRef.current) {
+        setCurrentTime(audioRef.current.currentTime);
+      }
+    });
+    
+    audioRef.current.addEventListener("loadedmetadata", () => {
+      if (audioRef.current) {
+        setDuration(audioRef.current.duration);
+        console.log("Audio metadata loaded, duration:", audioRef.current.duration);
+      }
+    });
+    
+    audioRef.current.addEventListener("ended", () => {
+      console.log("Audio playback ended");
+      setIsPlaying(false);
+    });
+  }
+  
+  // Clean up on unmount
+  return () => {
     if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.play().catch(error => {
-          console.error('Failed to play:', error)
-          setIsPlaying(false)
-        })
-      } else {
-        audioRef.current.pause()
+      // Remove all event listeners and clean up
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      
+      // Revoke any blob URLs
+      if (audioLoadingState.blobUrl) {
+        URL.revokeObjectURL(audioLoadingState.blobUrl);
       }
     }
-  }, [isPlaying])
+  };
+}, []);
 
   // Handle volume changes
   useEffect(() => {
