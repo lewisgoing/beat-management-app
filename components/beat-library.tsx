@@ -10,6 +10,7 @@ import AudioPlayer from "@/components/audio-player"
 import AppSidebar from "@/components/app-sidebar"
 import BeatDetail from "@/components/beat-detail"
 import CloudSyncStatus from "@/components/cloud-sync-status"
+import ImportFromDropbox from "@/components/import-from-dropbox"
 import { SidebarProvider, useSidebar } from "@/components/ui/sidebar"
 import { LayoutGrid, List, SlidersHorizontal, ChevronDown, X, Cloud } from 'lucide-react'
 import { motion, AnimatePresence } from "framer-motion"
@@ -79,7 +80,9 @@ export default function BeatLibrary() {
   
   // Cloud sync status
   const [showCloudStatus, setShowCloudStatus] = useState(false)
-
+  
+  const { openDropboxPicker } = useMusic()
+  
   // Listen for sidebar navigation changes
   useEffect(() => {
     const handleSidebarNavChange = (e: CustomEvent) => {
@@ -555,6 +558,7 @@ export default function BeatLibrary() {
                   transition={{ duration: 0.3 }}
                 >
                   <CloudSyncStatus onClose={() => setShowCloudStatus(false)} />
+                  <ImportFromDropbox />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -566,7 +570,9 @@ export default function BeatLibrary() {
           
           <AudioPlayer />
         </div>
+        
       </div>
+      
       
       <AnimatePresence>
         {selectedBeatForDetail && (
@@ -576,6 +582,7 @@ export default function BeatLibrary() {
           />
         )}
       </AnimatePresence>
+
     </SidebarProvider>
   )
 }
