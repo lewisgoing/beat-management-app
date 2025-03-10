@@ -87,7 +87,7 @@ export const beatService = {
       const { data: beats, error } = await supabase
         .from('beats')
         .select('*')
-        .order('createdAt', { ascending: false })
+        .order('createdat', { ascending: false })
       
       if (error) {
         console.error('Error fetching beats:', error)
@@ -106,8 +106,8 @@ export const beatService = {
       try {
         const { data, error: tagError } = await supabase
           .from('beat_tags')
-          .select('beatId, tagId')
-          .in('beatId', beatIds)
+          .select('beatid, tagid')
+          .in('beatid', beatIds)
         
         if (tagError) {
           console.error('Error fetching beat tags:', tagError)
@@ -647,7 +647,7 @@ export const tagService = {
         const { error: tagError } = await supabase
           .from('beat_tags')
           .delete()
-          .eq('tagId', id)
+          .eq('tagid', id)
         
         if (tagError) {
           console.error(`Error deleting beat relationships for tag ${id}:`, tagError)
@@ -705,8 +705,8 @@ export const collectionService = {
       try {
         const { data, error: beatsError } = await supabase
           .from('collection_beats')
-          .select('collectionId, beatId')
-          .in('collectionId', collectionIds)
+          .select('collectionid, beatid')
+          .in('collectionid', collectionIds)
           .order('position')
         
         if (beatsError) {
